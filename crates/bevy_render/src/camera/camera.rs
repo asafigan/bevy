@@ -17,7 +17,7 @@ use bevy_ecs::{
     reflect::ReflectComponent,
     system::{Commands, ParamSet, Query, Res},
 };
-use bevy_math::{Mat4, UVec2, Vec2, Vec3};
+use bevy_math::{Affine2, Affine3A, Mat2, Mat3A, Mat4, UVec2, Vec2, Vec3, Vec3A};
 use bevy_reflect::prelude::*;
 use bevy_reflect::FromReflect;
 use bevy_transform::components::GlobalTransform;
@@ -212,9 +212,7 @@ impl Camera {
         camera_transform: &GlobalTransform,
         world_position: Vec3,
     ) -> Option<Vec3> {
-        // Build a transform to convert from world to NDC using camera data
-        let world_to_ndc: Mat4 =
-            self.computed.projection_matrix * camera_transform.compute_matrix().inverse();
+        let world_to_ndc: Mat4 = self.compute_world_to_ndc_matrix(camera_transform);
         let ndc_space_coords: Vec3 = world_to_ndc.project_point3(world_position);
 
         if !ndc_space_coords.is_nan() {
@@ -222,6 +220,99 @@ impl Camera {
         } else {
             None
         }
+    }
+
+    /// Given a position in Normalized Device Coordinates, use the camera's viewport to compute the position in world space.
+    ///
+    /// To go from world to Normalized Device Coordinates, you should use
+    /// [`world_to_ndc`](Self::world_to_ndc).
+    pub fn ndc_to_world(
+        &self,
+        camera_transform: &GlobalTransform,
+        ndc_position: Vec3,
+    ) -> Option<Vec3> {
+        // Build a transform to convert from NDC to world using camera data
+        let ndc_to_world: Mat4 =
+            camera_transform.compute_matrix() * self.computed.projection_matrix.inverse();
+        let world_position: Vec3 = ndc_to_world.project_point3(ndc_position);
+
+        if !world_position.is_nan() {
+            Some(world_position)
+        } else {
+            None
+        }
+    }
+
+    /// Compute the matrix that transforms from world space to camera's viewport space.
+    ///
+    /// To compute the matrix that transforms from world space to a space representing the camera's viewport, you should use
+    /// [`compute_world_to_ndc_matrix`](Self::compute_world_to_ndc_matrix)
+    #[doc(alias = "compute_world_to_screen_matrix")]
+    pub fn compute_world_to_viewport_matrix(
+        &self,
+        camera_transform: &GlobalTransform,
+    ) -> Option<Mat4> {
+        let target_size = self.logical_viewport_size()?;
+
+        let ndc_to_viewport = Affine2 {
+            matrix2: Mat2::from_diagonal(target_size * 0.5),
+            translation: Vec2::ONE,
+        };
+
+        let ndc_to_viewport = Affine3A {
+            matrix3: Mat3A::from_cols(
+                ndc_to_viewport.x_axis.extend(0.0).into(),
+                ndc_to_viewport.y_axis.extend(0.0).into(),
+                Vec3A::Z,
+            ),
+            translation: ndc_to_viewport.translation.extend(0.0).into(),
+        };
+
+        Some(ndc_to_viewport * self.compute_world_to_ndc_matrix(camera_transform))
+    }
+
+    /// Compute the matrix that transforms from world space to Normalized Device Coordinates.
+    ///
+    /// To compute the matrix that transforms from world space to camera's viewport space, you should use
+    /// [`compute_world_to_viewport_matrix`](Self::compute_world_to_viewport_matrix)
+    pub fn compute_world_to_ndc_matrix(&self, camera_transform: &GlobalTransform) -> Mat4 {
+        self.computed.projection_matrix * camera_transform.compute_matrix().inverse()
+    }
+
+    /// Compute the matrix that transforms from Normalized Device Coordinates to  world space.
+    ///
+    /// To compute the matrix that transforms from camera's viewport space to world space, you should use
+    /// [`compute_world_to_viewport_matrix`](Self::compute_viewport_to_world_matrix)
+    pub fn compute_ndc_to_world_matrix(&self, camera_transform: &GlobalTransform) -> Mat4 {
+        camera_transform.compute_matrix() * self.computed.projection_matrix.inverse()
+    }
+
+    /// Compute the matrix that transforms from camera's viewport space to  world space.
+    ///
+    /// To compute the matrix that transforms from Normalized Device Coordinates to world space, you should use
+    /// [`compute_ndc_to_world_matrix`](Self::compute_ndc_to_world_matrix)
+    #[doc(alias = "compute_screen_to_world_matrix")]
+    pub fn compute_viewport_to_world_matrix(
+        &self,
+        camera_transform: &GlobalTransform,
+    ) -> Option<Mat4> {
+        let target_size = self.logical_viewport_size()?;
+
+        let viewport_to_ndc = Affine2 {
+            matrix2: Mat2::from_diagonal(target_size * 2.0),
+            translation: -Vec2::ONE,
+        };
+
+        let viewport_to_ndc = Affine3A {
+            matrix3: Mat3A::from_cols(
+                viewport_to_ndc.x_axis.extend(0.0).into(),
+                viewport_to_ndc.y_axis.extend(0.0).into(),
+                Vec3A::Z,
+            ),
+            translation: viewport_to_ndc.translation.extend(0.0).into(),
+        };
+
+        Some(self.compute_ndc_to_world_matrix(camera_transform) * viewport_to_ndc)
     }
 }
 
